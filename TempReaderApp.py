@@ -10,19 +10,16 @@
 Usage:   
 
 """
-import time
 import json
-import plotly
-from PyQt5.QtCore import *
-from PyQt5 import QtCore, uic, QtGui
-from PyQt5.QtGui import *
 import sys
+import time
+
+import plotly
 import plotly.graph_objs as go
-from PyQt5.QtWidgets import (
-    QSplashScreen, QDialog, QApplication, QFileDialog, QTableWidgetItem, QTableWidget,
-    QAbstractItemView
-    )
-from PyQt5.QtWidgets import QMainWindow, QApplication
+from PyQt5 import QtCore, QtGui, uic
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QSplashScreen, QTableWidgetItem
 
 qtCreatorFile = "tempR1.ui"  # Enter file here.
 
@@ -115,16 +112,19 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
                             mode="markers", line=dict(shape='spline'), name='Readings', text=meta)
         data = go.Data([trace1, trace2, trace3])
         layout = go.Layout(title="<b>Reagent Carousel Temperature Readings</b>",
-                           titlefont={'size': 24, 'color': 'rgb(25,25,112)'},
+                           titlefont={'size': 24, 'color': 'rgb(255,255,255)'},
                            xaxis1={'title': '<b>Day of Reading</b>', "anchor": "x1", 'autorange': True, 'tickangle':
-                               90, 'titlefont': {'size': 17, 'color': 'rgb(25,25,112)'}},
+                               75, 'titlefont': {'size': 17, 'color': 'rgb(255,255,255)'}, 'color': 'rgb(255, 255, '
+                                                                                                    '255)'},
                            yaxis1={'title': '<b>Temperature ({0}C)</b>'.format(degree), "anchor": "y1",
                                    "domain": [15.0, 32.0],
                                    "range": [10.0, 35.0], 'autorange': True,
-                                   'titlefont': {'size': 17, 'color': 'rgb(25,25,112)'}},
+                                   'titlefont': {'size': 17, 'color': 'rgb(255,255,255)'}, 'color': 'rgb(255, 255, '
+                                                                                                    '255)'},
                            margin={'b': 120},
                            plot_bgcolor='rgb(245,245,245)',
-                           paper_bgcolor='rgb(176,196,222)'
+                           paper_bgcolor='rgb(0,51,102)',
+                           legend={'bgcolor': '#E2E2E2', 'bordercolor': '#FFFFFF', 'borderwidth':2}
                            )
         layout.update(dict(annotations=outOfLimit))
         figure = go.Figure(data=data, layout=layout)

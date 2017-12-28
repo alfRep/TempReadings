@@ -11,19 +11,20 @@ Usage:
 
 """
 import json
+import logging
 import os
 import sys
 import time
 
 import plotly
-import plotly.figure_factory as ff
 import plotly.graph_objs as go
-from PyQt5 import QtCore, QtGui, uic
+from PyQt5 import QtCore, QtGui, QtWidgets, uic
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
-from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QSplashScreen
+from PyQt5.QtPrintSupport import QPrinter
+from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QSplashScreen, QTreeWidgetItem
 
-qtCreatorFile = "UI" + os.sep + "tempR1.ui"  # Enter file here.
+qtCreatorFile = "UI" + os.sep + "tempR2.ui"  # Enter file here.
 
 Ui_MainWindow, QtBaseClass = uic.loadUiType(qtCreatorFile)   #uic.loadUiType(qtCreatorFile)
 
@@ -33,38 +34,76 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         QMainWindow.__init__(self)
         Ui_MainWindow.__init__(self)
         self.setupUi(self)
-        self.loadBtn.setEnabled(False)
-        # self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
-        self.setWindowIcon(QtGui.QIcon("Images" + os.sep + "Thermometer.png"))
-        self.chooseBtn.clicked.connect(self.FileChooser)
-        self.webView.setEnabled(False)
-        self.webViewTable.setEnabled(False)
-        self.tableLbl.setVisible(False)
-        self.scatterLbl.setVisible(False)
-        self.loadBtn.clicked.connect(self.ProcessData)
-        self.setFixedSize(self.size())
-        self.fileErrorLbl.setVisible(False)
+
+        self.initUI()
+
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(asctime)s - %(funcName)s - Line %(lineno)d - %(levelname)s: %(message)s',
+                            datefmt='%m-%d-%Y %I:%M:%S %p',
+                            filename="Logs" + os.sep + "TempReaderApp.log",
+                            filemode='a')
+        logging.debug("Initialized")
 
 
         # self.dataTable.setHorizontalHeaderLabels(("DATE;READING").split(";"))
         # self.dataTable.setSelectionBehavior(QAbstractItemView.SelectRows)
 
+    def initUI(self):
+        self.center()
+        self.setFixedSize(self.size())
+        self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
+        self.setWindowIcon(QtGui.QIcon("Images" + os.sep + "Thermometer.png"))
+        self.chooseBtn.clicked.connect(self.FileChooser)
+        self.webView.setEnabled(False)
+        self.webViewTable.setEnabled(False)
+        self.fileErrorLbl.setVisible(False)
+        self.loadBtn.setEnabled(False)
+        self.loadBtn.clicked.connect(self.ProcessData)
+        self.resetBtn.clicked.connect(self.Reset)
+        self.exitBtn.clicked.connect(self.Exit)
+        self.imageGLbl.setPixmap(QtGui.QPixmap("Images" + os.sep + "whitegear.png"))
+        self.imageFLbl.setPixmap(QtGui.QPixmap("Images" + os.sep + "file.png"))
+
+        self.browser = QTreeWidgetItem(self.treeWidget)
+        self.browser.setFlags(self.browser.flags() | Qt.ItemIsUserCheckable)
+        self.browser.setText(0, "Open Browser")
+        self.browser.setCheckState(0, Qt.Unchecked)
+
+        self.pdf = QTreeWidgetItem(self.treeWidget)
+        self.pdf.setFlags(self.pdf.flags() | Qt.ItemIsUserCheckable)
+        self.pdf.setText(0, "Create PDF")
+        self.pdf.setCheckState(0, Qt.Unchecked)
+
+        self.webViewTable.page().mainFrame().setScrollBarPolicy(Qt.Horizontal, Qt.ScrollBarAlwaysOff)
+        self.webViewTable.page().mainFrame().setScrollBarPolicy(Qt.Vertical, Qt.ScrollBarAlwaysOff)
+
+
+    def center(self):
+        qr = self.frameGeometry()
+        cp = QtWidgets.QDesktopWidget().availableGeometry().center()
+        qr.moveCenter(cp)
+        self.move(qr.topLeft())
+
     def FileChooser(self):
+        logging.debug("Choosing file")
+        self.CleanPlot()
         self.fileErrorLbl.setVisible(False)
         self.fname = QFileDialog.getOpenFileName(self, 'Select file', '/home', 'Temp File (8500_RCTT.json)')
         self.fileEdit.setText(self.fname[0])
         if not self.fname[0]:
+            logging.error("Temp file not opened")
             return None
         self.loadBtn.setEnabled(True)
+        logging.info("Filename: {0}".format(self.fname[0]))
         return self.fname[0]
 
     def ProcessData(self):
-        print("generating chart")
+        logging.debug("Processing data")
 
         days, high, low, meta, temps, info = self.ReadData()
 
         if not all([days, high, low, meta, temps, info]):
-            print("Error ProcessData")
+            logging.error("Could not process data")
             return None
 
         # self.UpdateTable(days, temps)
@@ -72,34 +111,53 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.CreatePlot(days, meta, temps, high, low, info)
 
     def ReadData(self):
-
+        logging.debug("Read data")
         temps = []
         days = []
         meta = []
+        times = []
+        status = []
+        sn = []
         high = []
         low = []
-        info = [["DATE", "TEMP", "TIME", "STATUS", "SN"]]
+        # info = [["DATE"], ["TEMP"], ["TIME"], ["STATUS"], ["SN"]]
+        info = []
         try:
-            data = json.load(open(self.fname[0]))
+            with open(self.fname[0]) as file:
+                data = json.load(file)
             for item in data["Readings"]:
                 temps.append(item["AvgTemp"])
                 days.append("{0}-{1}-{2}".format(item["Date"][5:7], item["Date"][8:], item["Date"][0:4]))
                 meta.append("SN: {0}<br>Status: {1}<br>Time: {2}".format(item["SN"], item["Status"], item["Time"]))
                 high.append(item["HighRange"])
                 low.append(item["LowRange"])
-                info.append([item["Date"], item["AvgTemp"], item["Time"], item["Status"], item["SN"]])
+                times.append(item["Time"])
+                status.append(item["Status"])
+                sn.append(item["SN"])
+                # info.append([item["Date"], item["AvgTemp"], item["Time"], item["Status"], item["SN"]])
+            info.extend([days] + [temps] + [times] + [status] + [sn])
             return days, high, low, meta, temps, info
-        except Exception:
+        except Exception as ex:
             self.fileErrorLbl.setVisible(True)
-            print("Error ReadData")
-            return None, None, None, None, None
+            logging.error("Exception occurred: {0}".format(ex))
+            return None, None, None, None, None, None
 
 
+
+    def CleanPlot(self):
+        logging.debug("clean plots")
+        self.webView.setVisible(False)
+        self.webViewTable.setVisible(False)
+        self.webView.setEnabled(False)
+        self.webViewTable.setEnabled(False)
 
     def CreatePlot(self, days, meta, temps, high, low, info):
+        logging.debug("Creating plot")
         degree = u"\u00b0"
         upper = [high[0]] * len(days)
         lower = [low[0]] * len(days)
+
+        self.openbrowser = True if self.browser.checkState(0) == 2 else False
 
         outOfLimit = []
         for i, item in enumerate(temps):
@@ -109,6 +167,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
                                                                                                     size=7,
                                                                                                     color='red'),
                                       showarrow=False))
+        logging.info("Number out of limit: {0}".format(len(outOfLimit)))
         trace1 = go.Scatter(x=days, y=upper, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
                             mode="markers+lines", name='Upper Limit', showlegend=False)
         trace2 = go.Scatter(x=days, y=lower, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
@@ -137,7 +196,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         htmlPlot = os.path.join("Plots" + os.sep + 'TempReadings.html')
         itemsToRemove = ['sendDataToCloud', 'toImage', 'hoverClosestCartesian','hoverCompareCartesian', 'hoverClosest3d',
                          'toggleHover', 'toggleSpikelines']
-        plotly.offline.plot(figure, filename=htmlPlot, auto_open=False, show_link=False,
+        plotly.offline.plot(figure, filename=htmlPlot, auto_open=self.openbrowser, show_link=False,
                             config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
         # plotly.offline.plot(figure, filename=htmlPlot, auto_open=False, show_link=False,
         #                     config={"displayModeBar": True})
@@ -145,36 +204,101 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
 
 
         data_matrix = info
-        # colorscale = [[0, '#4d004c'], [.5, '#f2e5ff'], [1, '#ffffff']]
-        table = ff.create_table(data_matrix)
-        table.layout.width = 485
+        headers = [["DATE"], ["TEMP"], ["TIME"], ["STATUS"], ["SN"]]
+        # # colorscale = [[0, '#4d004c'], [.5, '#f2e5ff'], [1, '#ffffff']]
+        # table = ff.create_table(data_matrix)
+        # table.layout.width = 485
+        #
         tablePlot = os.path.join("Plots" + os.sep + 'TempReadingsTable.html')
+        #
+        # plotly.offline.plot(table, filename=tablePlot, auto_open=self.openbrowser, show_link=False,
+        #                     config={"displayModeBar": False})
 
-        plotly.offline.plot(table, filename=tablePlot, auto_open=False,
-                            show_link=False, config={"displayModeBar": False})
+        trace = go.Table(
+
+                header=dict(values=headers,
+
+                            line=dict(color='rgb(50,50,50)', width=1),
+                            align=['center'] * 5,
+                            font=dict(color=['white'] * 5, size=14),
+                            fill=dict(color='rgb(0,51,102)')
+                            ),
+                cells=dict(values=info,
+                           align=['center'] * len(days),
+                           line=dict(color='rgb(50,50,50)', width=1),
+                           )
+                )
+
+        layout = dict(width=841, height=500)
+        data = [trace]
+        fig = dict(data=data, layout=layout)
+
+        plotly.offline.plot(fig, filename=tablePlot, auto_open=self.openbrowser, show_link=False,
+                            config={"displayModeBar": False})
 
 
         self.ShowPlots(htmlPlot, tablePlot)
 
+        if self.pdf.checkState(0) == 2:
+            self.convert_html_to_pdf(tablePlot, "Reports" + os.sep + 'TempReadingsPlot.pdf')
+
     def ShowPlots(self, html, table):
+        logging.debug("Showing plot")
         self.webView.load(QUrl(os.path.join("file:///" + os.path.abspath(html))))
         self.webViewTable.load(QUrl(os.path.join("file:///" + os.path.abspath(table))))
 
         self.webView.setEnabled(True)
         self.webViewTable.setEnabled(True)
-        self.tableLbl.setVisible(True)
-        self.scatterLbl.setVisible(True)
-
         self.webViewTable.show()
         self.webView.show()
 
+    def convert_html_to_pdf(self, source_html, output_filename):
+        doc = QTextDocument()
+        location = source_html
+        print(location)
+        html = open(location).read()
+        doc.setHtml(html)
+        printer = QPrinter()
+        printer.setOutputFileName(output_filename)
+        printer.setOutputFormat(QPrinter.PdfFormat)
+        # printer.setPageSize(QPrinter.A4)
+        # printer.setPageMargins(15, 15, 15, 15, QPrinter.Millimeter)
+        doc.print(printer)
+
+        # pdf = weasyprint.HTML('http://www.google.com').write_pdf()
+        # file('google.pdf', 'w').write(pdf)
+
+        # config = pdfkit.configuration(wkhtmltopdf='/opt/bin/wkhtmltopdf')
+        # pdfkit.from_file(source_html, output_filename, configuration=config)
+        # # open output file for writing (truncated binary)
+        # result_file = open(output_filename, "w+b")
+        #
+        # # convert HTML to PDF
+        # pisa_status = pisa.CreatePDF(
+        #         source_html,  # the HTML to convert
+        #         dest=result_file)  # file handle to recieve result
+        #
+        # # close output file
+        # result_file.close()  # close output file
+        #
+        # # return True on success and False on errors
+        # return pisa_status.err
+
+
+    def Reset(self):
+        self.CleanPlot()
+        self.fileEdit.setText('')
+        self.loadBtn.setEnabled(False)
+
+    def Exit(self):
+        sys.exit(0)
 
 app = QApplication(sys.argv)
-app.setStyle("plastique")
+app.setStyle("fusion")
 splash_image = QPixmap("Images" + os.sep + "Thermometer.png").scaled(200, 200, QtCore.Qt.KeepAspectRatio)
 splash = QSplashScreen(splash_image)
 splash.show()
-time.sleep(2)
+time.sleep(1)
 myApp = TempReaderApp()
 myApp.show()
 splash.finish(myApp)

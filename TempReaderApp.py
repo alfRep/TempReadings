@@ -24,7 +24,7 @@ from PyQt5.QtGui import *
 from PyQt5.QtPrintSupport import QPrinter
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QSplashScreen, QTreeWidgetItem
 
-qtCreatorFile = "UI" + os.sep + "tempR2.ui"  # Enter file here.
+qtCreatorFile = "UI" + os.sep + "tempR3.ui"  # Enter file here.
 
 Ui_MainWindow, QtBaseClass = uic.loadUiType(qtCreatorFile)   #uic.loadUiType(qtCreatorFile)
 
@@ -34,7 +34,6 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         QMainWindow.__init__(self)
         Ui_MainWindow.__init__(self)
         self.setupUi(self)
-
         self.initUI()
 
         logging.basicConfig(level=logging.DEBUG,
@@ -45,10 +44,9 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         logging.debug("Initialized")
 
 
-        # self.dataTable.setHorizontalHeaderLabels(("DATE;READING").split(";"))
-        # self.dataTable.setSelectionBehavior(QAbstractItemView.SelectRows)
-
     def initUI(self):
+        font = QFont()
+        font.setPointSize(12)
         self.center()
         self.setFixedSize(self.size())
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
@@ -57,6 +55,8 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.webView.setEnabled(False)
         self.webViewTable.setEnabled(False)
         self.fileErrorLbl.setVisible(False)
+        self.plotTabLbl.setVisible(True)
+        self.tableTabLbl.setVisible(True)
         self.loadBtn.setEnabled(False)
         self.loadBtn.clicked.connect(self.ProcessData)
         self.resetBtn.clicked.connect(self.Reset)
@@ -68,14 +68,38 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.browser.setFlags(self.browser.flags() | Qt.ItemIsUserCheckable)
         self.browser.setText(0, "Open Browser")
         self.browser.setCheckState(0, Qt.Unchecked)
+        self.browser.setFont(0, font)
 
-        self.pdf = QTreeWidgetItem(self.treeWidget)
-        self.pdf.setFlags(self.pdf.flags() | Qt.ItemIsUserCheckable)
+        self.sav_img = QTreeWidgetItem(self.treeWidget)
+        self.sav_img.setFlags(self.sav_img.flags() | Qt.ItemIsUserCheckable)
+        self.sav_img.setText(0, "Save Images")
+        self.sav_img.setCheckState(0, Qt.Unchecked)
+        self.sav_img.setFont(0, font)
+
+        self.pdf = QTreeWidgetItem(self.sav_img)
+        self.pdf.setFlags(self.pdf.flags() |  Qt.ItemIsUserCheckable)
         self.pdf.setText(0, "Create PDF")
         self.pdf.setCheckState(0, Qt.Unchecked)
+        self.pdf.setDisabled(True)
+        self.pdf.setFont(0, font)
 
         self.webViewTable.page().mainFrame().setScrollBarPolicy(Qt.Horizontal, Qt.ScrollBarAlwaysOff)
         self.webViewTable.page().mainFrame().setScrollBarPolicy(Qt.Vertical, Qt.ScrollBarAlwaysOff)
+        self.treeWidget.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.treeWidget.setStyleSheet("""
+        QTreeWidget:item:disabled {
+            color: #A0A0A0;
+        }
+        """)
+        self.tabWidget.setCurrentIndex(0)
+
+        self.treeWidget.itemChanged.connect(self.SaveImageSignal)
+
+    def SaveImageSignal(self):
+        if self.sav_img.checkState(0) == 2:
+            self.browser.setCheckState(0, QtCore.Qt.Checked)
+        if self.pdf.checkState(0) == 2:
+            self.sav_img.setCheckState(0, QtCore.Qt.Checked)
 
 
     def center(self):
@@ -143,13 +167,15 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             return None, None, None, None, None, None
 
 
-
     def CleanPlot(self):
         logging.debug("clean plots")
         self.webView.setVisible(False)
         self.webViewTable.setVisible(False)
         self.webView.setEnabled(False)
         self.webViewTable.setEnabled(False)
+        self.plotTabLbl.setVisible(True)
+        self.tableTabLbl.setVisible(True)
+
 
     def CreatePlot(self, days, meta, temps, high, low, info):
         logging.debug("Creating plot")
@@ -158,6 +184,13 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         lower = [low[0]] * len(days)
 
         self.openbrowser = True if self.browser.checkState(0) == 2 else False
+        if self.sav_img.checkState(0) == 2:
+            image = 'png'
+            img_plot_filename = 'img_TempReadingsPlot'
+            img_table_filename = 'img_TempReadingsTable'
+        else:
+            image = img_plot_filename = img_table_filename = None
+
 
         outOfLimit = []
         for i, item in enumerate(temps):
@@ -196,7 +229,8 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         htmlPlot = os.path.join("Plots" + os.sep + 'TempReadings.html')
         itemsToRemove = ['sendDataToCloud', 'toImage', 'hoverClosestCartesian','hoverCompareCartesian', 'hoverClosest3d',
                          'toggleHover', 'toggleSpikelines']
-        plotly.offline.plot(figure, filename=htmlPlot, auto_open=self.openbrowser, show_link=False,
+        plotly.offline.plot(figure, filename=htmlPlot, auto_open=self.openbrowser, image=image,
+                            image_filename=img_plot_filename, show_link=False,
                             config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
         # plotly.offline.plot(figure, filename=htmlPlot, auto_open=False, show_link=False,
         #                     config={"displayModeBar": True})
@@ -229,28 +263,32 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
                            )
                 )
 
-        layout = dict(width=841, height=500)
+        layout = dict(width=1100, height=721, margin=dict(b=0, t=0, r=60, l=0), paper_bgcolor='#EFEFEF', dragmode=None)
         data = [trace]
         fig = dict(data=data, layout=layout)
 
-        plotly.offline.plot(fig, filename=tablePlot, auto_open=self.openbrowser, show_link=False,
-                            config={"displayModeBar": False})
+        plotly.offline.plot(fig, filename=tablePlot,auto_open=self.openbrowser, show_link=False, image=image,
+                            image_filename=img_table_filename,
+                            config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
 
 
         self.ShowPlots(htmlPlot, tablePlot)
 
-        if self.pdf.checkState(0) == 2:
-            self.convert_html_to_pdf(tablePlot, "Reports" + os.sep + 'TempReadingsPlot.pdf')
+        # TODO
+        # if self.pdf.checkState(0) == 2:
+        #     self.convert_html_to_pdf(tablePlot, "Reports" + os.sep + 'TempReadingsPlot.pdf')
 
     def ShowPlots(self, html, table):
         logging.debug("Showing plot")
         self.webView.load(QUrl(os.path.join("file:///" + os.path.abspath(html))))
         self.webViewTable.load(QUrl(os.path.join("file:///" + os.path.abspath(table))))
-
         self.webView.setEnabled(True)
         self.webViewTable.setEnabled(True)
+        self.plotTabLbl.setVisible(False)
+        self.tableTabLbl.setVisible(False)
         self.webViewTable.show()
         self.webView.show()
+
 
     def convert_html_to_pdf(self, source_html, output_filename):
         doc = QTextDocument()
@@ -290,12 +328,13 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.fileEdit.setText('')
         self.loadBtn.setEnabled(False)
 
+
     def Exit(self):
         sys.exit(0)
 
 app = QApplication(sys.argv)
 app.setStyle("fusion")
-splash_image = QPixmap("Images" + os.sep + "Thermometer.png").scaled(200, 200, QtCore.Qt.KeepAspectRatio)
+splash_image = QPixmap("Images" + os.sep + "ThermometerR.png").scaled(200, 200, QtCore.Qt.KeepAspectRatio)
 splash = QSplashScreen(splash_image)
 splash.show()
 time.sleep(1)

@@ -15,18 +15,19 @@ import logging
 import os
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 
+import fpdf
 import plotly
 import plotly.graph_objs as go
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
-from PyQt5.QtPrintSupport import QPrinter
-from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QSplashScreen, QTreeWidgetItem
+from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSplashScreen, QTreeWidgetItem, QWidget
 
-qtCreatorFile = "UI" + os.sep + "tempR3.ui"  # Enter file here.
+qtCreatorFile = "UI" + os.sep + "tempR4.ui"
 
-Ui_MainWindow, QtBaseClass = uic.loadUiType(qtCreatorFile)   #uic.loadUiType(qtCreatorFile)
+Ui_MainWindow, QtBaseClass = uic.loadUiType(qtCreatorFile)
 
 
 class TempReaderApp(QMainWindow, Ui_MainWindow):
@@ -36,11 +37,16 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.setupUi(self)
         self.initUI()
 
+        logFile = "Logs" + os.sep + "TempReaderApp.log"
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s - %(funcName)s - Line %(lineno)d - %(levelname)s: %(message)s',
                             datefmt='%m-%d-%Y %I:%M:%S %p',
-                            filename="Logs" + os.sep + "TempReaderApp.log",
+                            filename=logFile,
                             filemode='a')
+
+        handler = RotatingFileHandler(logFile, maxBytes=5 * 1024 * 1024,
+                                      backupCount=1, encoding=None, delay=0)
+        logging.getLogger().addHandler(handler)
         logging.debug("Initialized")
 
 
@@ -51,18 +57,19 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.setFixedSize(self.size())
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
         self.setWindowIcon(QtGui.QIcon("Images" + os.sep + "Thermometer.png"))
-        self.chooseBtn.clicked.connect(self.FileChooser)
+        # self.chooseBtn.clicked.connect(self.FileChooser)
         self.webView.setEnabled(False)
         self.webViewTable.setEnabled(False)
         self.fileErrorLbl.setVisible(False)
         self.plotTabLbl.setVisible(True)
         self.tableTabLbl.setVisible(True)
-        self.loadBtn.setEnabled(False)
         self.loadBtn.clicked.connect(self.ProcessData)
         self.resetBtn.clicked.connect(self.Reset)
+        self.createPDFBtn.clicked.connect(self.CreatePDF)
         self.exitBtn.clicked.connect(self.Exit)
         self.imageGLbl.setPixmap(QtGui.QPixmap("Images" + os.sep + "whitegear.png"))
         self.imageFLbl.setPixmap(QtGui.QPixmap("Images" + os.sep + "file.png"))
+        self.imageCLbl.setPixmap(QtGui.QPixmap("Images" + os.sep + "scatterplot.png"))
 
         self.browser = QTreeWidgetItem(self.treeWidget)
         self.browser.setFlags(self.browser.flags() | Qt.ItemIsUserCheckable)
@@ -76,15 +83,16 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.sav_img.setCheckState(0, Qt.Unchecked)
         self.sav_img.setFont(0, font)
 
-        self.pdf = QTreeWidgetItem(self.sav_img)
-        self.pdf.setFlags(self.pdf.flags() |  Qt.ItemIsUserCheckable)
-        self.pdf.setText(0, "Create PDF")
-        self.pdf.setCheckState(0, Qt.Unchecked)
-        self.pdf.setDisabled(True)
-        self.pdf.setFont(0, font)
+        # self.pdf = QTreeWidgetItem(self.sav_img)
+        # self.pdf.setFlags(self.pdf.flags() |  Qt.ItemIsUserCheckable)
+        # self.pdf.setText(0, "Create PDF")
+        # self.pdf.setCheckState(0, Qt.Unchecked)
+        # self.pdf.setDisabled(False)
+        # self.pdf.setFont(0, font)
 
         self.webViewTable.page().mainFrame().setScrollBarPolicy(Qt.Horizontal, Qt.ScrollBarAlwaysOff)
         self.webViewTable.page().mainFrame().setScrollBarPolicy(Qt.Vertical, Qt.ScrollBarAlwaysOff)
+        self.webViewTable.setEnabled(False)
         self.treeWidget.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.treeWidget.setStyleSheet("""
         QTreeWidget:item:disabled {
@@ -98,30 +106,33 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
     def SaveImageSignal(self):
         if self.sav_img.checkState(0) == 2:
             self.browser.setCheckState(0, QtCore.Qt.Checked)
-        if self.pdf.checkState(0) == 2:
-            self.sav_img.setCheckState(0, QtCore.Qt.Checked)
-
 
     def center(self):
         qr = self.frameGeometry()
         cp = QtWidgets.QDesktopWidget().availableGeometry().center()
         qr.moveCenter(cp)
         self.move(qr.topLeft())
+        
 
-    def FileChooser(self):
-        logging.debug("Choosing file")
+    def LoadFile(self):
+        logging.debug("Loading file")
         self.CleanPlot()
         self.fileErrorLbl.setVisible(False)
         self.fname = QFileDialog.getOpenFileName(self, 'Select file', '/home', 'Temp File (8500_RCTT.json)')
         self.fileEdit.setText(self.fname[0])
+        print(self.fname)
         if not self.fname[0]:
-            logging.error("Temp file not opened")
+            logging.error("Temp file open cancelled")
             return None
-        self.loadBtn.setEnabled(True)
+        # self.loadBtn.setEnabled(True)
         logging.info("Filename: {0}".format(self.fname[0]))
         return self.fname[0]
 
+
     def ProcessData(self):
+        file = self.LoadFile()
+        if not file:
+            return
         logging.debug("Processing data")
 
         days, high, low, meta, temps, info = self.ReadData()
@@ -129,8 +140,6 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         if not all([days, high, low, meta, temps, info]):
             logging.error("Could not process data")
             return None
-
-        # self.UpdateTable(days, temps)
 
         self.CreatePlot(days, meta, temps, high, low, info)
 
@@ -144,7 +153,6 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         sn = []
         high = []
         low = []
-        # info = [["DATE"], ["TEMP"], ["TIME"], ["STATUS"], ["SN"]]
         info = []
         try:
             with open(self.fname[0]) as file:
@@ -158,7 +166,6 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
                 times.append(item["Time"])
                 status.append(item["Status"])
                 sn.append(item["SN"])
-                # info.append([item["Date"], item["AvgTemp"], item["Time"], item["Status"], item["SN"]])
             info.extend([days] + [temps] + [times] + [status] + [sn])
             return days, high, low, meta, temps, info
         except Exception as ex:
@@ -206,18 +213,25 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         trace2 = go.Scatter(x=days, y=lower, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
                             mode="markers+lines", name='Lower Limit', showlegend=False)
         trace3 = go.Scatter(x=days, y=temps, marker={'symbol': 0, 'color': 'rgb(0,0,255)', 'line': dict(width=1),
-                                                     'size': "8"},
+                                                     'size': "5"},
                             mode="markers", line=dict(shape='spline'), name='Readings', text=meta)
         data = go.Data([trace1, trace2, trace3])
         layout = go.Layout(title="<b>Reagent Carousel Temperature Readings</b>",
                            titlefont={'family':'Arial','size': 23, 'color': 'rgb(255,255,255)'},
                            xaxis1={'title': '<b>Day of Reading</b>', "anchor": "x1", 'autorange': True, 'tickangle':
-                               45, 'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
-                                   'color': 'rgb(255, 255, 255)', 'showgrid': True, 'gridcolor': '#CCE5FF'},
+                               90, 'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
+                                   'color': 'rgb(255, 255, 255)', 'showgrid': True, 'gridcolor': '#CCE5FF',
+                                   'tickfont': dict(
+                                           family='Arial',
+                                           size=12,
+                                           color='white')},
                            yaxis1={'title': '<b>Temperature ({0}C)</b>'.format(degree), "anchor": "y1",
                                     'autorange': True,
                                    'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
-                                   'color': 'rgb(255, 255, 255)','gridcolor': '#CCE5FF'},
+                                   'color': 'rgb(255, 255, 255)','gridcolor': '#CCE5FF', 'dtick': 0.5, 'tickfont': dict(
+                                family='Arial',
+                                size=12,
+                                color='white')},
                            margin={'b': 120},
                            plot_bgcolor='rgb(245,245,245)',
                            paper_bgcolor='rgb(0,51,102)',
@@ -268,69 +282,133 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         fig = dict(data=data, layout=layout)
 
         plotly.offline.plot(fig, filename=tablePlot,auto_open=self.openbrowser, show_link=False, image=image,
-                            image_filename=img_table_filename,
+                            image_filename=img_table_filename, image_height=800, image_width=700,
                             config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
 
 
         self.ShowPlots(htmlPlot, tablePlot)
 
-        # TODO
-        # if self.pdf.checkState(0) == 2:
-        #     self.convert_html_to_pdf(tablePlot, "Reports" + os.sep + 'TempReadingsPlot.pdf')
 
     def ShowPlots(self, html, table):
         logging.debug("Showing plot")
         self.webView.load(QUrl(os.path.join("file:///" + os.path.abspath(html))))
         self.webViewTable.load(QUrl(os.path.join("file:///" + os.path.abspath(table))))
         self.webView.setEnabled(True)
-        self.webViewTable.setEnabled(True)
+        self.webViewTable.setEnabled(False)
         self.plotTabLbl.setVisible(False)
         self.tableTabLbl.setVisible(False)
         self.webViewTable.show()
         self.webView.show()
+        logging.debug("End Showing plot")
 
 
-    def convert_html_to_pdf(self, source_html, output_filename):
-        doc = QTextDocument()
-        location = source_html
-        print(location)
-        html = open(location).read()
-        doc.setHtml(html)
-        printer = QPrinter()
-        printer.setOutputFileName(output_filename)
-        printer.setOutputFormat(QPrinter.PdfFormat)
-        # printer.setPageSize(QPrinter.A4)
-        # printer.setPageMargins(15, 15, 15, 15, QPrinter.Millimeter)
-        doc.print(printer)
+    def CreatePDF(self):
+        try:
+            self.directory = QFileDialog.getExistingDirectory(self, 'Select directory')
+            self.pdfEdit.setText(self.directory)
 
-        # pdf = weasyprint.HTML('http://www.google.com').write_pdf()
-        # file('google.pdf', 'w').write(pdf)
-
-        # config = pdfkit.configuration(wkhtmltopdf='/opt/bin/wkhtmltopdf')
-        # pdfkit.from_file(source_html, output_filename, configuration=config)
-        # # open output file for writing (truncated binary)
-        # result_file = open(output_filename, "w+b")
-        #
-        # # convert HTML to PDF
-        # pisa_status = pisa.CreatePDF(
-        #         source_html,  # the HTML to convert
-        #         dest=result_file)  # file handle to recieve result
-        #
-        # # close output file
-        # result_file.close()  # close output file
-        #
-        # # return True on success and False on errors
-        # return pisa_status.err
+            # TODO check if files exists
+            pdf = MyPDF()
+            pdf.set_display_mode(zoom='real', layout='default')
+            pdf.add_page("L")
+            pdf.set_font('Arial', 'B', 12)
+            pdf.set_title("Reagent Carousel Temperature Report")
+            pdf.set_author("Rick Roll")
+            # pdf.text(70.0, 5.0, "Reagent Carousel Temperature Report")
+            pdf.image("Images"+ os.sep + "img_TempReadingsTable.png", x=None, y=None, w=0, h=0)
+            pdf.output("Reports" + os.sep + 'TempReadingsTable.pdf', "F")
+            pdf.close()
+        except Exception as ex:
+            logging.error("Error occurred while generating PDF {0}".format(ex))
+            errorMessage = MessageBox("Error encountered: {0}".format(ex))
+            errorMessage.showDialog()
 
 
     def Reset(self):
         self.CleanPlot()
         self.fileEdit.setText('')
-        self.loadBtn.setEnabled(False)
+        self.pdfEdit.setText('')
+        self.loadBtn.setEnabled(True)
+        self.fileErrorLbl.setVisible(False)
 
 
     def Exit(self):
         sys.exit(0)
+
+
+class MyPDF(fpdf.FPDF):
+    def header(self):
+        """
+        Header on each page
+        """
+        # set the font for the header, B=Bold
+        self.set_font("Arial", style="B", size=15)
+
+        # insert my logo
+        self.image("Images" + os.sep + "Thermometer.png", x=10, y=5, w=15)
+        # position logo on the right
+        self.cell(w=80)
+
+        # page title
+        self.cell(100.0, 5.0, "Reagent Carousel Temperature Report", ln=0, align="C")
+
+        # insert a line break of 20 pixels
+        self.ln(20)
+
+    def footer(self):
+        """
+        Footer on each page
+        """
+        # set the font, I=italic
+        self.set_font("Arial", style="I", size=8)
+
+        # position footer at 15mm from the bottom
+        self.set_y(-15)
+
+        # display the page number and center it
+        pageNum = "Page %s/{nb}" % self.page_no()
+        self.cell(0, 10, pageNum, align="C")
+
+
+class MessageBox(QWidget):
+
+    def __init__(self, message):
+        super().__init__()
+        self.title = 'MessageBox'
+        self.message = message
+        self.left = 10
+        self.top = 10
+        self.width = 320
+        self.height = 200
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle(self.title)
+        self.setGeometry(self.left, self.top, self.width, self.height)
+        self.setStyleSheet("""  QMessageBox {
+                                    background-color: #008CBA;
+                                }
+
+                                QMessageBox QLabel {
+                                    color: white;
+                                }
+                                QMessageBox QPushButton {
+                                    color: white;
+                                    background-color: #003366;
+                                }
+                            """
+
+                )
+        qr = self.frameGeometry()
+        cp = QtWidgets.QDesktopWidget().availableGeometry().center()
+        qr.moveCenter(cp)
+        self.move(qr.topLeft())
+
+        button = QMessageBox.warning(self, self.title, self.message, QMessageBox.Ok)
+
+    def showDialog(self):
+        self.show()
+
 
 app = QApplication(sys.argv)
 app.setStyle("fusion")

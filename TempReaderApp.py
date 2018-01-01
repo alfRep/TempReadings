@@ -13,20 +13,23 @@ Usage:
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
 from logging.handlers import RotatingFileHandler
 
 import fpdf
-import plotly
-import plotly.graph_objs as go
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSplashScreen, QTreeWidgetItem, QWidget
+from bokeh.io import export_png
+from bokeh.layouts import widgetbox
+from bokeh.models import ColumnDataSource, DataTable, DateFormatter, HTMLTemplateFormatter, HoverTool, TableColumn
+from bokeh.plotting import figure, output_file, save
 
-qtCreatorFile = "UI" + os.sep + "tempR4.ui"
+qtCreatorFile = "UI" + os.sep + "tempR5.ui"
 
 Ui_MainWindow, QtBaseClass = uic.loadUiType(qtCreatorFile)
 
@@ -57,7 +60,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.center()
         self.setFixedSize(self.size())
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
-        self.setWindowIcon(QtGui.QIcon("Images" + os.sep + "Thermometer.png"))
+        self.setWindowIcon(QtGui.QIcon("Icons" + os.sep + "Thermometer.png"))
         # self.chooseBtn.clicked.connect(self.FileChooser)
         self.webView.setEnabled(False)
         self.webViewTable.setEnabled(False)
@@ -68,9 +71,9 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.resetBtn.clicked.connect(self.Reset)
         self.createPDFBtn.clicked.connect(self.CreatePDF)
         self.exitBtn.clicked.connect(self.Exit)
-        self.imageGLbl.setPixmap(QtGui.QPixmap("Images" + os.sep + "whitegear.png"))
-        self.imageFLbl.setPixmap(QtGui.QPixmap("Images" + os.sep + "file.png"))
-        self.imageCLbl.setPixmap(QtGui.QPixmap("Images" + os.sep + "scatterplot.png"))
+        self.imageGLbl.setPixmap(QtGui.QPixmap("Icons" + os.sep + "whitegear.png"))
+        self.imageFLbl.setPixmap(QtGui.QPixmap("Icons" + os.sep + "file.png"))
+        self.imageCLbl.setPixmap(QtGui.QPixmap("Icons" + os.sep + "scatterplot.png"))
 
         self.browser = QTreeWidgetItem(self.treeWidget)
         self.browser.setFlags(self.browser.flags() | Qt.ItemIsUserCheckable)
@@ -95,11 +98,11 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         """)
         self.tabWidget.setCurrentIndex(0)
 
-        self.treeWidget.itemChanged.connect(self.SaveImageSignal)
-
-    def SaveImageSignal(self):
-        if self.sav_img.checkState(0) == 2:
-            self.browser.setCheckState(0, QtCore.Qt.Checked)
+    #     self.treeWidget.itemChanged.connect(self.SaveImageSignal)
+    #
+    # def SaveImageSignal(self):
+    #     if self.sav_img.checkState(0) == 2:
+    #         self.browser.setCheckState(0, QtCore.Qt.Checked)
 
     def center(self):
         qr = self.frameGeometry()
@@ -130,25 +133,23 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             return
         logging.debug("Processing data")
 
-        days, high, low, meta, temps, info = self.ReadData()
+        days, high, low, temps, status, sn, times = self.ReadData()
 
-        if not all([days, high, low, meta, temps, info]):
+        if not all([days, high, low, temps, status, sn, times]):
             logging.error("Could not process data from temperature file")
             return None
 
-        self.CreatePlot(days, meta, temps, high, low, info)
+        self.CreatePlot(days, temps, high, low, status, sn, times)
 
     def ReadData(self):
         logging.debug("Begin reading temperature data")
         temps = []
         days = []
-        meta = []
         times = []
         status = []
         sn = []
         high = []
         low = []
-        info = []
 
         try:
             with open(self.fname[0]) as file:
@@ -156,18 +157,16 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             for item in data["Readings"]:
                 temps.append(item["AvgTemp"])
                 days.append("{0}-{1}-{2}".format(item["Date"][5:7], item["Date"][8:], item["Date"][0:4]))
-                meta.append("SN: {0}<br>Status: {1}<br>Time: {2}".format(item["SN"], item["Status"], item["Time"]))
                 high.append(item["HighRange"])
                 low.append(item["LowRange"])
                 times.append(item["Time"])
                 status.append(item["Status"])
                 sn.append(item["SN"])
-            info.extend([days] + [temps] + [times] + [status] + [sn])
-            return days, high, low, meta, temps, info
+            return days, high, low, temps, status, sn, times
         except Exception as ex:
             self.fileErrorLbl.setVisible(True)
             logging.error("Exception occurred reading data: {0}".format(ex))
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
 
     def CleanPlot(self):
@@ -180,116 +179,290 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.tableTabLbl.setVisible(True)
 
 
-    def CreatePlot(self, days, meta, temps, high, low, info):
+    def CreatePlot(self, days, temps, high, low, status, sn, times):
         logging.debug("Creating plot of temperature data")
         degree = u"\u00b0"
         upper = [high[0]] * len(days)
         lower = [low[0]] * len(days)
 
         self.openbrowser = True if self.browser.checkState(0) == 2 else False
+        self.saveFiles = True if self.sav_img.checkState(0) == 2 else False
 
-        if self.sav_img.checkState(0) == 2:
-            image = 'png'
-            img_plot_filename = 'img_TempReadingsPlot'
-            img_table_filename = 'img_TempReadingsTable'
-        else:
-            image = img_plot_filename = img_table_filename = None
+        # image = 'png'
+        img_plot_filename = 'img_TempReadingsPlot.png'
+        img_table_filename = 'img_TempReadingsTable.png'
+
+        # output to static HTML file
+        output_file("temp_plot.html")
+        tools = ["box_select", "hover", "reset"]
+        # create a new plot
+        p = figure(plot_height=700, plot_width=1000, tools=tools, x_axis_label='Days', x_minor_ticks=len(days),
+                   y_axis_label='Temperature ({0}C)'.format(degree), x_axis_type="datetime", toolbar_location="right",
+                   title="Reagent Carousel Temperature Readings")
+
+        from datetime import datetime
+        daysF = None
+        try:
+            daysF = [datetime(int(x[6:]),int(x[0:2]),int(x[3:5])) for x in days]
+        except Exception as ex:
+            print(ex)
+
+        source = ColumnDataSource(data={
+            'Day': daysF,  # python datetime object as X axis
+            'Temp': temps,
+            'Day_str': days,  # string of datetime for display in tooltip
+            'High': high,
+            'Low': low,
+            'Status': status})
 
 
-        outOfLimit = []
-        logging.debug("Checking for out of limit values")
-        for i, item in enumerate(temps):
-            if item > upper[0] or item < lower[0]:
-                logging.info("This item is out of order: {0}".format(item))
-                outOfLimit.append(
-                        go.Annotation(text="<b>Out Of Range</b>", yshift=12, x=i, y=item, font=dict(family='Arial',
-                                                                                                    size=7,
-                                                                                                    color='red'),
-                                      showarrow=False))
-        logging.info("Number out of limit: {0}".format(len(outOfLimit)))
-        trace1 = go.Scatter(x=days, y=upper, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
-                            mode="markers+lines", name='Upper Limit', showlegend=False)
-        trace2 = go.Scatter(x=days, y=lower, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
-                            mode="markers+lines", name='Lower Limit', showlegend=False)
-        trace3 = go.Scatter(x=days, y=temps, marker={'symbol': 0, 'color': 'rgb(0,0,255)', 'line': dict(width=1),
-                                                     'size': "5"},
-                            mode="markers", line=dict(shape='spline'), name='Readings', text=meta)
-        data = go.Data([trace1, trace2, trace3])
-        layout = go.Layout(title="<b>Reagent Carousel Temperature Readings</b>",
-                           titlefont={'family':'Arial','size': 23, 'color': 'rgb(255,255,255)'},
-                           xaxis1={'title': '<b>Day of Reading</b>', "anchor": "x1", 'autorange': True, 'tickangle':
-                               90, 'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
-                                   'color': 'rgb(255, 255, 255)', 'showgrid': True, 'gridcolor': '#CCE5FF',
-                                   'tickfont': dict(
-                                           family='Arial',
-                                           size=12,
-                                           color='white')},
-                           yaxis1={'title': '<b>Temperature ({0}C)</b>'.format(degree), "anchor": "y1",
-                                    'autorange': True,
-                                   'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
-                                   'color': 'rgb(255, 255, 255)','gridcolor': '#CCE5FF', 'dtick': 0.5, 'tickfont': dict(
-                                family='Arial',
-                                size=12,
-                                color='white')},
-                           margin={'b': 120},
-                           plot_bgcolor='rgb(245,245,245)',
-                           paper_bgcolor='rgb(0,51,102)',
-                           legend={'bgcolor': '#E2E2E2', 'bordercolor': '#FFFFFF', 'borderwidth':2},
-                           dragmode='pan'
-                           )
-        layout.update(dict(annotations=outOfLimit))
-        figure = go.Figure(data=data, layout=layout)
-        htmlPlot = os.path.join("Plots" + os.sep + 'TempReadings.html')
-        itemsToRemove = ['sendDataToCloud', 'toImage', 'hoverClosestCartesian','hoverCompareCartesian', 'hoverClosest3d',
-                         'toggleHover', 'toggleSpikelines']
-        plotly.offline.plot(figure, filename=htmlPlot, auto_open=self.openbrowser, image=image,
-                            image_filename=img_plot_filename, show_link=False,
-                            config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
-        # plotly.offline.plot(figure, filename=htmlPlot, auto_open=False, show_link=False,
-        #                     config={"displayModeBar": True})
+        # p.line(days, upper, legend="Upper Limit", line_width=3)
+        # p.line(days, lower, legend="Lower Limit", line_width=3)
+        p.circle_x('Day', 'Temp', source=source, legend="Readings", line_width=3, hover_color="green")
+        # p.annulus(x=days, y=temps, color="#7FC97F",
+        #              inner_radius=0.2, outer_radius=0.5)
 
-        headers = [["DATE"], ["TEMP"], ["TIME"], ["STATUS"], ["SN"]]
-        # data_matrix = info
-        # colorscale = [[0, '#4d004c'], [.5, '#f2e5ff'], [1, '#ffffff']]
-        # table = ff.create_table(data_matrix)
-        # table.layout.width = 485
-        #
-        tablePlot = os.path.join("Plots" + os.sep + 'TempReadingsTable.html')
-        #
-        # plotly.offline.plot(table, filename=tablePlot, auto_open=self.openbrowser, show_link=False,
-        #                     config={"displayModeBar": False})
+        p.title.align = "center"
+        p.title.text_color = "navy"
+        p.title.text_font_size = "20px"
+        p.title.text_font_style = "bold"
+        p.xaxis[0].ticker.desired_num_ticks = len(days)
+        p.legend.visible = False
+        p.select_one(HoverTool).tooltips = [
+            ('Date', '@Day_str'),
+            ('Temp', '@Temp'),
+            ('High', '@High'),
+            ('Low', '@Low'),
+            ('Status', '@Status')
+            ]
+        save(p)
 
-        trace = go.Table(
+        shutil.copy2(os.path.join('temp_plot.html'), os.path.join("Plots" + os.sep + "plot.html"))
 
-                header=dict(values=headers,
+        html =self.createHTML(days, temps, high, low, times, status, sn)
 
-                            line=dict(color='rgb(50,50,50)', width=1),
-                            align=['center'] * 5,
-                            font=dict(color=['white'] * 5, size=14),
-                            fill=dict(color='rgb(0,51,102)')
-                            ),
-                cells=dict(values=info,
-                           align=['center'] * len(days),
-                           line=dict(color='rgb(50,50,50)', width=1),
-                           )
+        data = dict(
+                dates=daysF,
+                timeOfRead=times,
+                readings=temps,
+                highRead=high,
+                lowRead=low,
+                status=status,
+                serialNum=sn
                 )
+        source = ColumnDataSource(data)
 
-        layout = dict(width=1100, height=721, margin=dict(b=0, t=0, r=60, l=0), paper_bgcolor='white', dragmode=None)
-        data = [trace]
-        fig = dict(data=data, layout=layout)
+        templateSize = """
+        <div title="<%= x %>" style="font-size: 200%">
+        <%= value %>
+        </div>
+        """
 
-        plotly.offline.plot(fig, filename=tablePlot,auto_open=self.openbrowser, show_link=False, image=image,
-                            image_filename=img_table_filename, image_height=800, image_width=700,
-                            config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
+        templateStatus = """
+        <div style="color:<%= 
+            (function colorfromStat(){
+                if(value == "Fail"){
+                    return("red")}
+                else{return("black")}
+            }()) %>; 
+        "> 
+        <%= value %></div>
+        """
+
+        sizeFormatter = HTMLTemplateFormatter(template=templateSize)
+        statusFormatter = HTMLTemplateFormatter(template=templateStatus)
+
+        columns = [
+            TableColumn(field="dates", title="Date", formatter=DateFormatter()),
+            TableColumn(field="timeOfRead", title="Time"),
+            TableColumn(field="readings", title="Reading"),
+            TableColumn(field="highRead", title="Upper Limit"),
+            TableColumn(field="lowRead", title="Lower Limit"),
+            TableColumn(field="status", title="Status", formatter=statusFormatter),
+            TableColumn(field="serialNum", title="SN"),
+            ]
+        t = DataTable(source=source, columns=columns, width=1061, height=701, row_headers=False,
+                      scroll_to_selection=True, selectable=True)
+
+        # html = file_html(t, CDN, "my plot")
+        # with open(os.path.join("Plots" + os.sep + "table.html"), 'w') as f:
+        #         f.write(html)
+        save(widgetbox(t))
+        shutil.copy2(os.path.join('temp_plot.html'), os.path.join("Plots" + os.sep + "table.html"))
 
 
-        self.ShowPlots(htmlPlot, tablePlot)
+        if self.openbrowser:
+            import webbrowser
+            webbrowser.open(os.path.join("Plots" + os.sep + "plot.html"))
+            webbrowser.open(os.path.join("Plots" + os.sep + "table.html"))
 
+        if self.saveFiles:
+            export_png(p, filename=img_plot_filename)
+            shutil.move(os.path.join(img_plot_filename), os.path.join("Images" + os.sep + img_plot_filename))
+            export_png(t, filename=img_table_filename)
+            shutil.move(os.path.join(img_table_filename), os.path.join("Images" + os.sep + img_table_filename))
+
+        # outOfLimit = []
+        # logging.debug("Checking for out of limit values")
+        # for i, item in enumerate(temps):
+        #     if item > upper[0] or item < lower[0]:
+        #         logging.info("This item is out of order: {0}".format(item))
+        #         outOfLimit.append(
+        #                 go.Annotation(text="<b>Out Of Range</b>", yshift=12, x=i, y=item, font=dict(family='Arial',
+        #                                                                                             size=7,
+        #                                                                                             color='red'),
+        #                               showarrow=False))
+        # logging.info("Number out of limit: {0}".format(len(outOfLimit)))
+        # trace1 = go.Scatter(x=days, y=upper, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
+        #                     mode="markers+lines", name='Upper Limit', showlegend=False)
+        # trace2 = go.Scatter(x=days, y=lower, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
+        #                     mode="markers+lines", name='Lower Limit', showlegend=False)
+        # trace3 = go.Scatter(x=days, y=temps, marker={'symbol': 0, 'color': 'rgb(0,0,255)', 'line': dict(width=1),
+        #                                              'size': "5"},
+        #                     mode="markers", line=dict(shape='spline'), name='Readings', text=meta)
+        # data = go.Data([trace1, trace2, trace3])
+        # layout = go.Layout(title="<b>Reagent Carousel Temperature Readings</b>",
+        #                    titlefont={'family':'Arial','size': 23, 'color': 'rgb(255,255,255)'},
+        #                    xaxis1={'title': '<b>Day of Reading</b>', "anchor": "x1", 'autorange': True, 'tickangle':
+        #                        90, 'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
+        #                            'color': 'rgb(255, 255, 255)', 'showgrid': True, 'gridcolor': '#CCE5FF',
+        #                            'tickfont': dict(
+        #                                    family='Arial',
+        #                                    size=12,
+        #                                    color='white')},
+        #                    yaxis1={'title': '<b>Temperature ({0}C)</b>'.format(degree), "anchor": "y1",
+        #                             'autorange': True,
+        #                            'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
+        #                            'color': 'rgb(255, 255, 255)','gridcolor': '#CCE5FF', 'dtick': 0.5, 'tickfont': dict(
+        #                         family='Arial',
+        #                         size=12,
+        #                         color='white')},
+        #                    margin={'b': 120},
+        #                    plot_bgcolor='rgb(245,245,245)',
+        #                    paper_bgcolor='rgb(0,51,102)',
+        #                    legend={'bgcolor': '#E2E2E2', 'bordercolor': '#FFFFFF', 'borderwidth':2},
+        #                    dragmode='pan'
+        #                    )
+        # layout.update(dict(annotations=outOfLimit))
+        # figure = go.Figure(data=data, layout=layout)
+        # htmlPlot = os.path.join("Plots" + os.sep + 'TempReadings.html')
+        # itemsToRemove = ['sendDataToCloud', 'toImage', 'hoverClosestCartesian','hoverCompareCartesian', 'hoverClosest3d',
+        #                  'toggleHover', 'toggleSpikelines']
+        # plotly.offline.plot(figure, filename=htmlPlot, auto_open=self.openbrowser, image=image,
+        #                     image_filename=img_plot_filename, show_link=False,
+        #                     config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
+        # # plotly.offline.plot(figure, filename=htmlPlot, auto_open=False, show_link=False,
+        # #                     config={"displayModeBar": True})
+        #
+        # headers = [["DATE"], ["TEMP"], ["TIME"], ["STATUS"], ["SN"]]
+        # # data_matrix = info
+        # # colorscale = [[0, '#4d004c'], [.5, '#f2e5ff'], [1, '#ffffff']]
+        # # table = ff.create_table(data_matrix)
+        # # table.layout.width = 485
+        # #
+        # tablePlot = os.path.join("Plots" + os.sep + 'TempReadingsTable.html')
+        # #
+        # # plotly.offline.plot(table, filename=tablePlot, auto_open=self.openbrowser, show_link=False,
+        # #                     config={"displayModeBar": False})
+        #
+        # trace = go.Table(
+        #
+        #         header=dict(values=headers,
+        #
+        #                     line=dict(color='rgb(50,50,50)', width=1),
+        #                     align=['center'] * 5,
+        #                     font=dict(color=['white'] * 5, size=14),
+        #                     fill=dict(color='rgb(0,51,102)')
+        #                     ),
+        #         cells=dict(values=info,
+        #                    align=['center'] * len(days),
+        #                    line=dict(color='rgb(50,50,50)', width=1),
+        #                    )
+        #         )
+        #
+        # layout = dict(width=1100, height=721, margin=dict(b=0, t=0, r=60, l=0), paper_bgcolor='white', dragmode=None)
+        # data = [trace]
+        # fig = dict(data=data, layout=layout)
+        #
+        # plotly.offline.plot(fig, filename=tablePlot,auto_open=self.openbrowser, show_link=False, image=image,
+        #                     image_filename=img_table_filename, image_height=800, image_width=700,
+        #                     config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
+        #
+        #
+        self.ShowPlots(r"Plots\plot.html",
+                       r"HTMLTable.html")
+
+    def createHTML(self, days, temps, high, low, times, status, sn):
+        strTable = """
+                        <html>
+                        <head>
+                        <style>
+                        table{
+                                width: 80%;
+                                border-collapse: collapse;
+                                font-family: Arial, serif;
+                            }
+                            
+                            th{
+                                height: 5px;
+                                text-align: center;
+                                background-color: #003366;;
+                                color: white;
+                                border: 1px solid #ddd;
+                            }
+                            
+                            td{
+                                height: 5px;
+                                text-align: center;
+                                border: 1px solid #ddd;
+                                font-size: 12px;
+                            }
+                            
+                            tr:hover{
+                                background-color: #008CBA;
+                            }
+                            </style>
+                            </head>
+                            <div style=overflow - x: auto;>
+                            <table>
+                            <tr>
+                            <th>Date</th>
+                            <th>Time</th>
+                            <th>Temp</th>
+                            <th>High</th>
+                            <th>Low</th>
+                            <th>Status</th>
+                            <th>SN</th>
+                            </tr>
+                            
+                            """
+        endTable ="</table></div></html>"
+
+        for i in range(len(days)):
+            if temps[i] <= high[i] and temps[i] >= low[i]:
+                strRW = "<tr><td>" + str(days[i]) + "</td><td>" + str(times[i]) + "</td><td>" + str(temps[i]) \
+                        + "</td><td>" + str(high[i])+ "</td><td>" + str(low[i]) + "</td><td>" + str(status[i]) \
+                        + "</td><td>" + str(sn[i]) + "</td></tr>"
+            else:
+                strRW = "<tr style=color:red><td>" + str(days[i]) + "</td><td>" + str(times[i]) + "</td><td>" + str(temps[i]) \
+                        + "</td><td>" + str(high[i]) + "</td><td>" + str(low[i]) + "</td><td>" + str(status[i]) \
+                        + "</td><td>" + str(sn[i]) + "</td></tr>"
+            strTable = strTable + strRW
+        strTable = strTable + endTable
+
+        with open("HTMLTable.html", 'w') as html:
+            html.write(strTable)
+        return html
 
     def ShowPlots(self, html, table):
+        print(os.path.abspath(html))
         logging.debug("Showing plot")
         self.webView.load(QUrl(os.path.join("file:///" + os.path.abspath(html))))
         self.webViewTable.load(QUrl(os.path.join("file:///" + os.path.abspath(table))))
+
+        # self.webView.load(QUrl(html))
+        # self.webViewTable.load(QUrl(table))
+
         self.webView.setEnabled(True)
         self.webViewTable.setEnabled(False)
         self.plotTabLbl.setVisible(False)
@@ -311,6 +484,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             tableFilename = "img_TempReadingsTable.png"
             if not os.path.isfile(directory + os.sep + plotFilename) or not os.path.isfile(directory + os.sep + tableFilename):
                 logging.warning("Files are missing")
+                msg = MessageBox("Image files are missing.")
                 return
             pdf = MyPDF()
             pdf.alias_nb_pages()
@@ -355,7 +529,7 @@ class MyPDF(fpdf.FPDF):
         self.set_font("Arial", style="B", size=15)
 
         # insert my logo
-        self.image("Images" + os.sep + "Thermometer.png", x=90, y=5, w=15)
+        self.image("Icons" + os.sep + "Thermometer.png", x=90, y=5, w=15)
         # position logo on the right
         self.cell(w=80)
 
@@ -421,7 +595,7 @@ class MessageBox(QWidget):
 
 app = QApplication(sys.argv)
 app.setStyle("fusion")
-splash_image = QPixmap("Images" + os.sep + "ThermometerR.png").scaled(200, 200, QtCore.Qt.KeepAspectRatio)
+splash_image = QPixmap("Icons" + os.sep + "ThermometerR.png").scaled(200, 200, QtCore.Qt.KeepAspectRatio)
 splash = QSplashScreen(splash_image)
 splash.show()
 time.sleep(1)

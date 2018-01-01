@@ -13,6 +13,7 @@ Usage:
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -47,7 +48,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         handler = RotatingFileHandler(logFile, maxBytes=5 * 1024 * 1024,
                                       backupCount=1, encoding=None, delay=0)
         logging.getLogger().addHandler(handler)
-        logging.debug("Initialized")
+        logging.debug("Temperature app initialized")
 
 
     def initUI(self):
@@ -83,13 +84,6 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.sav_img.setCheckState(0, Qt.Unchecked)
         self.sav_img.setFont(0, font)
 
-        # self.pdf = QTreeWidgetItem(self.sav_img)
-        # self.pdf.setFlags(self.pdf.flags() |  Qt.ItemIsUserCheckable)
-        # self.pdf.setText(0, "Create PDF")
-        # self.pdf.setCheckState(0, Qt.Unchecked)
-        # self.pdf.setDisabled(False)
-        # self.pdf.setFont(0, font)
-
         self.webViewTable.page().mainFrame().setScrollBarPolicy(Qt.Horizontal, Qt.ScrollBarAlwaysOff)
         self.webViewTable.page().mainFrame().setScrollBarPolicy(Qt.Vertical, Qt.ScrollBarAlwaysOff)
         self.webViewTable.setEnabled(False)
@@ -115,16 +109,16 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         
 
     def LoadFile(self):
-        logging.debug("Loading file")
+        logging.debug("Loading temperature file")
         self.CleanPlot()
         self.fileErrorLbl.setVisible(False)
         self.fname = QFileDialog.getOpenFileName(self, 'Select file', '/home', 'Temp File (8500_RCTT.json)')
         self.fileEdit.setText(self.fname[0])
-        print(self.fname)
+
         if not self.fname[0]:
-            logging.error("Temp file open cancelled")
+            logging.warning("Temperature file selection cancelled")
             return None
-        # self.loadBtn.setEnabled(True)
+
         logging.info("Filename: {0}".format(self.fname[0]))
         return self.fname[0]
 
@@ -132,19 +126,20 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
     def ProcessData(self):
         file = self.LoadFile()
         if not file:
+            logging.debug("File not selected")
             return
         logging.debug("Processing data")
 
         days, high, low, meta, temps, info = self.ReadData()
 
         if not all([days, high, low, meta, temps, info]):
-            logging.error("Could not process data")
+            logging.error("Could not process data from temperature file")
             return None
 
         self.CreatePlot(days, meta, temps, high, low, info)
 
     def ReadData(self):
-        logging.debug("Read data")
+        logging.debug("Begin reading temperature data")
         temps = []
         days = []
         meta = []
@@ -154,6 +149,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         high = []
         low = []
         info = []
+
         try:
             with open(self.fname[0]) as file:
                 data = json.load(file)
@@ -170,12 +166,12 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             return days, high, low, meta, temps, info
         except Exception as ex:
             self.fileErrorLbl.setVisible(True)
-            logging.error("Exception occurred: {0}".format(ex))
+            logging.error("Exception occurred reading data: {0}".format(ex))
             return None, None, None, None, None, None
 
 
     def CleanPlot(self):
-        logging.debug("clean plots")
+        logging.debug("clean plots on the UI")
         self.webView.setVisible(False)
         self.webViewTable.setVisible(False)
         self.webView.setEnabled(False)
@@ -185,12 +181,13 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
 
 
     def CreatePlot(self, days, meta, temps, high, low, info):
-        logging.debug("Creating plot")
+        logging.debug("Creating plot of temperature data")
         degree = u"\u00b0"
         upper = [high[0]] * len(days)
         lower = [low[0]] * len(days)
 
         self.openbrowser = True if self.browser.checkState(0) == 2 else False
+
         if self.sav_img.checkState(0) == 2:
             image = 'png'
             img_plot_filename = 'img_TempReadingsPlot'
@@ -200,8 +197,10 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
 
 
         outOfLimit = []
+        logging.debug("Checking for out of limit values")
         for i, item in enumerate(temps):
             if item > upper[0] or item < lower[0]:
+                logging.info("This item is out of order: {0}".format(item))
                 outOfLimit.append(
                         go.Annotation(text="<b>Out Of Range</b>", yshift=12, x=i, y=item, font=dict(family='Arial',
                                                                                                     size=7,
@@ -249,11 +248,9 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         # plotly.offline.plot(figure, filename=htmlPlot, auto_open=False, show_link=False,
         #                     config={"displayModeBar": True})
 
-
-
-        data_matrix = info
         headers = [["DATE"], ["TEMP"], ["TIME"], ["STATUS"], ["SN"]]
-        # # colorscale = [[0, '#4d004c'], [.5, '#f2e5ff'], [1, '#ffffff']]
+        # data_matrix = info
+        # colorscale = [[0, '#4d004c'], [.5, '#f2e5ff'], [1, '#ffffff']]
         # table = ff.create_table(data_matrix)
         # table.layout.width = 485
         #
@@ -277,7 +274,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
                            )
                 )
 
-        layout = dict(width=1100, height=721, margin=dict(b=0, t=0, r=60, l=0), paper_bgcolor='#EFEFEF', dragmode=None)
+        layout = dict(width=1100, height=721, margin=dict(b=0, t=0, r=60, l=0), paper_bgcolor='white', dragmode=None)
         data = [trace]
         fig = dict(data=data, layout=layout)
 
@@ -304,20 +301,33 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
 
     def CreatePDF(self):
         try:
-            self.directory = QFileDialog.getExistingDirectory(self, 'Select directory')
+            directory = self.directory = QFileDialog.getExistingDirectory(self, 'Select directory',
+                                                                          os.path.dirname(os.path.realpath(__file__)),
+                                                                          QFileDialog.ShowDirsOnly)
             self.pdfEdit.setText(self.directory)
 
             # TODO check if files exists
+            plotFilename = "img_TempReadingsPlot.png"
+            tableFilename = "img_TempReadingsTable.png"
+            if not os.path.isfile(directory + os.sep + plotFilename) or not os.path.isfile(directory + os.sep + tableFilename):
+                logging.warning("Files are missing")
+                return
             pdf = MyPDF()
+            pdf.alias_nb_pages()
             pdf.set_display_mode(zoom='real', layout='default')
             pdf.add_page("L")
             pdf.set_font('Arial', 'B', 12)
             pdf.set_title("Reagent Carousel Temperature Report")
             pdf.set_author("Rick Roll")
             # pdf.text(70.0, 5.0, "Reagent Carousel Temperature Report")
-            pdf.image("Images"+ os.sep + "img_TempReadingsTable.png", x=None, y=None, w=0, h=0)
-            pdf.output("Reports" + os.sep + 'TempReadingsTable.pdf', "F")
+            pdf.image(directory + os.sep + plotFilename, x=45, y=None, w=0, h=160)
+            pdf.set_x(60)
+            pdf.image(directory + os.sep + tableFilename, x=100, y=None, w=0, h=212)
+            outputFile = "Reports" + os.sep + 'TempReadingsReport.pdf'
+            pdf.output(outputFile, "F")
             pdf.close()
+            print("open file")
+            subprocess.Popen([outputFile], shell=True)
         except Exception as ex:
             logging.error("Error occurred while generating PDF {0}".format(ex))
             errorMessage = MessageBox("Error encountered: {0}".format(ex))
@@ -345,28 +355,28 @@ class MyPDF(fpdf.FPDF):
         self.set_font("Arial", style="B", size=15)
 
         # insert my logo
-        self.image("Images" + os.sep + "Thermometer.png", x=10, y=5, w=15)
+        self.image("Images" + os.sep + "Thermometer.png", x=90, y=5, w=15)
         # position logo on the right
         self.cell(w=80)
 
         # page title
-        self.cell(100.0, 5.0, "Reagent Carousel Temperature Report", ln=0, align="C")
+        self.cell(120.0, 5.0, "Reagent Carousel Temperature Report", ln=0, align="C")
 
         # insert a line break of 20 pixels
-        self.ln(20)
+        self.ln(15)
 
     def footer(self):
         """
         Footer on each page
         """
         # set the font, I=italic
-        self.set_font("Arial", style="I", size=8)
+        self.set_font("Arial", style="B", size=9)
 
         # position footer at 15mm from the bottom
         self.set_y(-15)
 
         # display the page number and center it
-        pageNum = "Page %s/{nb}" % self.page_no()
+        pageNum = "Page %s of {nb}" % self.page_no()
         self.cell(0, 10, pageNum, align="C")
 
 
@@ -397,7 +407,6 @@ class MessageBox(QWidget):
                                     background-color: #003366;
                                 }
                             """
-
                 )
         qr = self.frameGeometry()
         cp = QtWidgets.QDesktopWidget().availableGeometry().center()

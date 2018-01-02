@@ -25,9 +25,9 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSplashScreen, QTreeWidgetItem, QWidget
 from bokeh.io import export_png
-from bokeh.layouts import widgetbox
-from bokeh.models import ColumnDataSource, DataTable, DateFormatter, HTMLTemplateFormatter, HoverTool, TableColumn
+from bokeh.models import ColumnDataSource, HoverTool
 from bokeh.plotting import figure, output_file, save
+from fpdf import HTMLMixin
 
 qtCreatorFile = "UI" + os.sep + "tempR5.ui"
 
@@ -61,11 +61,11 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.setFixedSize(self.size())
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
         self.setWindowIcon(QtGui.QIcon("Icons" + os.sep + "Thermometer.png"))
-        # self.chooseBtn.clicked.connect(self.FileChooser)
         self.webView.setEnabled(False)
         self.webViewTable.setEnabled(False)
-        self.fileErrorLbl.setVisible(False)
+        self.plotTabLbl.setText("Select file to load.")
         self.plotTabLbl.setVisible(True)
+        self.tableTabLbl.setText("Select file to load.")
         self.tableTabLbl.setVisible(True)
         self.loadBtn.clicked.connect(self.ProcessData)
         self.resetBtn.clicked.connect(self.Reset)
@@ -98,11 +98,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         """)
         self.tabWidget.setCurrentIndex(0)
 
-    #     self.treeWidget.itemChanged.connect(self.SaveImageSignal)
-    #
-    # def SaveImageSignal(self):
-    #     if self.sav_img.checkState(0) == 2:
-    #         self.browser.setCheckState(0, QtCore.Qt.Checked)
+        self.miniBtn.clicked.connect(self.miniScreen)
 
     def center(self):
         qr = self.frameGeometry()
@@ -110,11 +106,12 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         qr.moveCenter(cp)
         self.move(qr.topLeft())
         
+    def miniScreen(self):
+        self.setWindowState(Qt.WindowMinimized)
 
     def LoadFile(self):
         logging.debug("Loading temperature file")
         self.CleanPlot()
-        self.fileErrorLbl.setVisible(False)
         self.fname = QFileDialog.getOpenFileName(self, 'Select file', '/home', 'Temp File (8500_RCTT.json)')
         self.fileEdit.setText(self.fname[0])
 
@@ -128,6 +125,13 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
 
     def ProcessData(self):
         file = self.LoadFile()
+        print("test")
+        self.tableTabLbl.setText("Loading file, please wait.")
+        self.tableTabLbl.setVisible(True)
+        self.plotTabLbl.setText("Loading file, please wait.")
+        self.plotTabLbl.setVisible(True)
+        QApplication.processEvents()
+
         if not file:
             logging.debug("File not selected")
             return
@@ -136,7 +140,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         days, high, low, temps, status, sn, times = self.ReadData()
 
         if not all([days, high, low, temps, status, sn, times]):
-            logging.error("Could not process data from temperature file")
+            logging.error("Could not process data from temperature file, list is None")
             return None
 
         self.CreatePlot(days, temps, high, low, status, sn, times)
@@ -164,7 +168,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
                 sn.append(item["SN"])
             return days, high, low, temps, status, sn, times
         except Exception as ex:
-            self.fileErrorLbl.setVisible(True)
+            MessageBox("Error opening file {0}".format(ex))
             logging.error("Exception occurred reading data: {0}".format(ex))
             return None, None, None, None, None, None, None
 
@@ -175,15 +179,17 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.webViewTable.setVisible(False)
         self.webView.setEnabled(False)
         self.webViewTable.setEnabled(False)
+        self.plotTabLbl.setText("Select file to load.")
         self.plotTabLbl.setVisible(True)
+        self.tableTabLbl.setText("Select file to load.")
         self.tableTabLbl.setVisible(True)
 
 
     def CreatePlot(self, days, temps, high, low, status, sn, times):
         logging.debug("Creating plot of temperature data")
         degree = u"\u00b0"
-        upper = [high[0]] * len(days)
-        lower = [low[0]] * len(days)
+        # upper = [high[0]] * len(days)
+        # lower = [low[0]] * len(days)
 
         self.openbrowser = True if self.browser.checkState(0) == 2 else False
         self.saveFiles = True if self.sav_img.checkState(0) == 2 else False
@@ -205,7 +211,8 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         try:
             daysF = [datetime(int(x[6:]),int(x[0:2]),int(x[3:5])) for x in days]
         except Exception as ex:
-            print(ex)
+            logging.warning("Could not convert to date time object: {0}".format(ex))
+            MessageBox("Error encountered processing data: {0}".format(ex))
 
         source = ColumnDataSource(data={
             'Day': daysF,  # python datetime object as X axis
@@ -237,160 +244,29 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             ]
         save(p)
 
-        shutil.copy2(os.path.join('temp_plot.html'), os.path.join("Plots" + os.sep + "plot.html"))
+        try:
+            shutil.copy2(os.path.join('temp_plot.html'), os.path.join("Plots" + os.sep + "plot.html"))
+        except Exception as ex:
+            logging.warning("Could not move files: {0}".format(ex))
+            MessageBox("Error encountered processing data: {0}".format(ex))
 
-        html =self.createHTML(days, temps, high, low, times, status, sn)
-
-        data = dict(
-                dates=daysF,
-                timeOfRead=times,
-                readings=temps,
-                highRead=high,
-                lowRead=low,
-                status=status,
-                serialNum=sn
-                )
-        source = ColumnDataSource(data)
-
-        templateSize = """
-        <div title="<%= x %>" style="font-size: 200%">
-        <%= value %>
-        </div>
-        """
-
-        templateStatus = """
-        <div style="color:<%= 
-            (function colorfromStat(){
-                if(value == "Fail"){
-                    return("red")}
-                else{return("black")}
-            }()) %>; 
-        "> 
-        <%= value %></div>
-        """
-
-        sizeFormatter = HTMLTemplateFormatter(template=templateSize)
-        statusFormatter = HTMLTemplateFormatter(template=templateStatus)
-
-        columns = [
-            TableColumn(field="dates", title="Date", formatter=DateFormatter()),
-            TableColumn(field="timeOfRead", title="Time"),
-            TableColumn(field="readings", title="Reading"),
-            TableColumn(field="highRead", title="Upper Limit"),
-            TableColumn(field="lowRead", title="Lower Limit"),
-            TableColumn(field="status", title="Status", formatter=statusFormatter),
-            TableColumn(field="serialNum", title="SN"),
-            ]
-        t = DataTable(source=source, columns=columns, width=1061, height=701, row_headers=False,
-                      scroll_to_selection=True, selectable=True)
-
-        # html = file_html(t, CDN, "my plot")
-        # with open(os.path.join("Plots" + os.sep + "table.html"), 'w') as f:
-        #         f.write(html)
-        save(widgetbox(t))
-        shutil.copy2(os.path.join('temp_plot.html'), os.path.join("Plots" + os.sep + "table.html"))
+        self.createHTML(days, temps, high, low, times, status, sn)
 
 
         if self.openbrowser:
             import webbrowser
             webbrowser.open(os.path.join("Plots" + os.sep + "plot.html"))
-            webbrowser.open(os.path.join("Plots" + os.sep + "table.html"))
+            webbrowser.open(os.path.join("Plots" + os.sep + "HTMLTable.html"))
 
         if self.saveFiles:
             export_png(p, filename=img_plot_filename)
-            shutil.move(os.path.join(img_plot_filename), os.path.join("Images" + os.sep + img_plot_filename))
-            export_png(t, filename=img_table_filename)
-            shutil.move(os.path.join(img_table_filename), os.path.join("Images" + os.sep + img_table_filename))
+            try:
+                shutil.move(os.path.join(img_plot_filename), os.path.join("Images" + os.sep + img_plot_filename))
+            except Exception as ex:
+                logging.warning("Could not move files: {0}".format(ex))
+                MessageBox("Error encountered processing data: {0}".format(ex))
 
-        # outOfLimit = []
-        # logging.debug("Checking for out of limit values")
-        # for i, item in enumerate(temps):
-        #     if item > upper[0] or item < lower[0]:
-        #         logging.info("This item is out of order: {0}".format(item))
-        #         outOfLimit.append(
-        #                 go.Annotation(text="<b>Out Of Range</b>", yshift=12, x=i, y=item, font=dict(family='Arial',
-        #                                                                                             size=7,
-        #                                                                                             color='red'),
-        #                               showarrow=False))
-        # logging.info("Number out of limit: {0}".format(len(outOfLimit)))
-        # trace1 = go.Scatter(x=days, y=upper, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
-        #                     mode="markers+lines", name='Upper Limit', showlegend=False)
-        # trace2 = go.Scatter(x=days, y=lower, marker={'color': 'black', 'symbol': 104, 'size': "7", 'opacity': '0.9'},
-        #                     mode="markers+lines", name='Lower Limit', showlegend=False)
-        # trace3 = go.Scatter(x=days, y=temps, marker={'symbol': 0, 'color': 'rgb(0,0,255)', 'line': dict(width=1),
-        #                                              'size': "5"},
-        #                     mode="markers", line=dict(shape='spline'), name='Readings', text=meta)
-        # data = go.Data([trace1, trace2, trace3])
-        # layout = go.Layout(title="<b>Reagent Carousel Temperature Readings</b>",
-        #                    titlefont={'family':'Arial','size': 23, 'color': 'rgb(255,255,255)'},
-        #                    xaxis1={'title': '<b>Day of Reading</b>', "anchor": "x1", 'autorange': True, 'tickangle':
-        #                        90, 'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
-        #                            'color': 'rgb(255, 255, 255)', 'showgrid': True, 'gridcolor': '#CCE5FF',
-        #                            'tickfont': dict(
-        #                                    family='Arial',
-        #                                    size=12,
-        #                                    color='white')},
-        #                    yaxis1={'title': '<b>Temperature ({0}C)</b>'.format(degree), "anchor": "y1",
-        #                             'autorange': True,
-        #                            'titlefont': {'family': 'Arial', 'size': 17, 'color': 'rgb(255,255,255)'},
-        #                            'color': 'rgb(255, 255, 255)','gridcolor': '#CCE5FF', 'dtick': 0.5, 'tickfont': dict(
-        #                         family='Arial',
-        #                         size=12,
-        #                         color='white')},
-        #                    margin={'b': 120},
-        #                    plot_bgcolor='rgb(245,245,245)',
-        #                    paper_bgcolor='rgb(0,51,102)',
-        #                    legend={'bgcolor': '#E2E2E2', 'bordercolor': '#FFFFFF', 'borderwidth':2},
-        #                    dragmode='pan'
-        #                    )
-        # layout.update(dict(annotations=outOfLimit))
-        # figure = go.Figure(data=data, layout=layout)
-        # htmlPlot = os.path.join("Plots" + os.sep + 'TempReadings.html')
-        # itemsToRemove = ['sendDataToCloud', 'toImage', 'hoverClosestCartesian','hoverCompareCartesian', 'hoverClosest3d',
-        #                  'toggleHover', 'toggleSpikelines']
-        # plotly.offline.plot(figure, filename=htmlPlot, auto_open=self.openbrowser, image=image,
-        #                     image_filename=img_plot_filename, show_link=False,
-        #                     config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
-        # # plotly.offline.plot(figure, filename=htmlPlot, auto_open=False, show_link=False,
-        # #                     config={"displayModeBar": True})
-        #
-        # headers = [["DATE"], ["TEMP"], ["TIME"], ["STATUS"], ["SN"]]
-        # # data_matrix = info
-        # # colorscale = [[0, '#4d004c'], [.5, '#f2e5ff'], [1, '#ffffff']]
-        # # table = ff.create_table(data_matrix)
-        # # table.layout.width = 485
-        # #
-        # tablePlot = os.path.join("Plots" + os.sep + 'TempReadingsTable.html')
-        # #
-        # # plotly.offline.plot(table, filename=tablePlot, auto_open=self.openbrowser, show_link=False,
-        # #                     config={"displayModeBar": False})
-        #
-        # trace = go.Table(
-        #
-        #         header=dict(values=headers,
-        #
-        #                     line=dict(color='rgb(50,50,50)', width=1),
-        #                     align=['center'] * 5,
-        #                     font=dict(color=['white'] * 5, size=14),
-        #                     fill=dict(color='rgb(0,51,102)')
-        #                     ),
-        #         cells=dict(values=info,
-        #                    align=['center'] * len(days),
-        #                    line=dict(color='rgb(50,50,50)', width=1),
-        #                    )
-        #         )
-        #
-        # layout = dict(width=1100, height=721, margin=dict(b=0, t=0, r=60, l=0), paper_bgcolor='white', dragmode=None)
-        # data = [trace]
-        # fig = dict(data=data, layout=layout)
-        #
-        # plotly.offline.plot(fig, filename=tablePlot,auto_open=self.openbrowser, show_link=False, image=image,
-        #                     image_filename=img_table_filename, image_height=800, image_width=700,
-        #                     config={'displaylogo': False, 'modeBarButtonsToRemove': itemsToRemove})
-        #
-        #
-        self.ShowPlots(r"Plots\plot.html",
-                       r"HTMLTable.html")
+        self.ShowPlots(r"Plots\plot.html", r"Plots\HTMLTable.html")
 
     def createHTML(self, days, temps, high, low, times, status, sn):
         strTable = """
@@ -398,7 +274,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
                         <head>
                         <style>
                         table{
-                                width: 80%;
+                                width: 100%;
                                 border-collapse: collapse;
                                 font-family: Arial, serif;
                             }
@@ -408,18 +284,14 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
                                 text-align: center;
                                 background-color: #003366;;
                                 color: white;
-                                border: 1px solid #ddd;
+                                border: 1px solid #008CBA;
                             }
                             
                             td{
                                 height: 5px;
                                 text-align: center;
-                                border: 1px solid #ddd;
-                                font-size: 12px;
-                            }
-                            
-                            tr:hover{
-                                background-color: #008CBA;
+                                border: 1px solid #008CBA;
+                                font-size: 13px;
                             }
                             </style>
                             </head>
@@ -450,19 +322,14 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             strTable = strTable + strRW
         strTable = strTable + endTable
 
-        with open("HTMLTable.html", 'w') as html:
+        with open("Plots" + os.sep + "HTMLTable.html", 'w') as html:
             html.write(strTable)
         return html
 
     def ShowPlots(self, html, table):
-        print(os.path.abspath(html))
         logging.debug("Showing plot")
         self.webView.load(QUrl(os.path.join("file:///" + os.path.abspath(html))))
         self.webViewTable.load(QUrl(os.path.join("file:///" + os.path.abspath(table))))
-
-        # self.webView.load(QUrl(html))
-        # self.webViewTable.load(QUrl(table))
-
         self.webView.setEnabled(True)
         self.webViewTable.setEnabled(False)
         self.plotTabLbl.setVisible(False)
@@ -481,8 +348,7 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
 
             # TODO check if files exists
             plotFilename = "img_TempReadingsPlot.png"
-            tableFilename = "img_TempReadingsTable.png"
-            if not os.path.isfile(directory + os.sep + plotFilename) or not os.path.isfile(directory + os.sep + tableFilename):
+            if not os.path.isfile(directory + os.sep + plotFilename):
                 logging.warning("Files are missing")
                 msg = MessageBox("Image files are missing.")
                 return
@@ -496,7 +362,24 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             # pdf.text(70.0, 5.0, "Reagent Carousel Temperature Report")
             pdf.image(directory + os.sep + plotFilename, x=45, y=None, w=0, h=160)
             pdf.set_x(60)
-            pdf.image(directory + os.sep + tableFilename, x=100, y=None, w=0, h=212)
+            h = """
+            
+                        <html>
+                        <head>
+                            <table>
+                            <tr>
+                            <th width="14%">Date</th>
+                            <th width="14%">Time</th>
+                            <th width="14%">Temp</th>
+                            <th width="14%">High</th>
+                            <th width="14%">Low</th>
+                            <th width="14%">Status</th>
+                            <th width="14%">SN</th>
+                            </tr>
+                            
+                            <tr><td>09-12-2016</td><td>07:10:52 AM</td><td>8.7</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr style=color:red><td>09-13-2016</td><td>07:12:15 AM</td><td>1.2</td><td>15.0</td><td>2.0</td><td>Fail</td><td>16FMP00032</td></tr><tr><td>09-14-2016</td><td>08:08:02 AM</td><td>6.1</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-15-2016</td><td>08:14:23 AM</td><td>8.0</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-16-2016</td><td>01:43:56 PM</td><td>8.1</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-17-2016</td><td>01:45:04 PM</td><td>9.2</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-18-2016</td><td>03:17:04 PM</td><td>9.5</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-19-2016</td><td>03:40:05 PM</td><td>9.6</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-20-2016</td><td>03:40:46 PM</td><td>9.7</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-21-2016</td><td>03:42:26 PM</td><td>9.8</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-22-2016</td><td>03:43:22 PM</td><td>9.9</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-23-2016</td><td>03:45:20 PM</td><td>10.0</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-24-2016</td><td>03:47:49 PM</td><td>10.1</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-25-2016</td><td>03:48:26 PM</td><td>10.2</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-26-2016</td><td>10:13:56 AM</td><td>10.3</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-27-2016</td><td>11:40:18 AM</td><td>10.4</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-28-2016</td><td>11:41:44 AM</td><td>10.5</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-29-2016</td><td>11:43:48 AM</td><td>10.5</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>09-30-2016</td><td>01:45:21 PM</td><td>10.5</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr style=color:red><td>10-01-2016</td><td>02:00:36 PM</td><td>15.9</td><td>15.0</td><td>2.0</td><td>Fail</td><td>16FMP00032</td></tr><tr><td>10-02-2016</td><td>02:01:11 PM</td><td>10.6</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-03-2016</td><td>02:01:46 PM</td><td>10.5</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-04-2016</td><td>02:02:11 PM</td><td>10.6</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-05-2016</td><td>02:02:42 PM</td><td>10.4</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-06-2016</td><td>02:03:14 PM</td><td>10.5</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-07-2016</td><td>02:03:52 PM</td><td>10.5</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-08-2016</td><td>02:04:32 PM</td><td>10.6</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-09-2016</td><td>02:04:58 PM</td><td>13.5</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-10-2016</td><td>02:45:23 PM</td><td>10.6</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-11-2016</td><td>09:45:16 AM</td><td>11.0</td><td>15.0</td><td>2.0</td><td>Pass</td><td>16FMP00032</td></tr><tr><td>10-12-2016</td><td>09:47:09 AM</td><td>11.0</td><td>15.0</td><td>8.0</td><td>Pass</td><td>16FMP00032</td></tr></table></div></html>
+            """
+            pdf.write_html(h)
             outputFile = "Reports" + os.sep + 'TempReadingsReport.pdf'
             pdf.output(outputFile, "F")
             pdf.close()
@@ -513,14 +396,17 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         self.fileEdit.setText('')
         self.pdfEdit.setText('')
         self.loadBtn.setEnabled(True)
-        self.fileErrorLbl.setVisible(False)
 
 
     def Exit(self):
         sys.exit(0)
 
 
-class MyPDF(fpdf.FPDF):
+class MyPDF(fpdf.FPDF, HTMLMixin):
+    def __init__(self, orientation='P', unit='mm', format='A4'):
+        super().__init__(orientation='P', unit='mm', format='A4')
+
+
     def header(self):
         """
         Header on each page
@@ -552,6 +438,8 @@ class MyPDF(fpdf.FPDF):
         # display the page number and center it
         pageNum = "Page %s of {nb}" % self.page_no()
         self.cell(0, 10, pageNum, align="C")
+
+
 
 
 class MessageBox(QWidget):

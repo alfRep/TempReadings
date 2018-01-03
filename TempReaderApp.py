@@ -25,7 +25,8 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QSplashScreen, QTreeWidgetItem, QWidget
 from bokeh.io import export_png
-from bokeh.models import ColumnDataSource, HoverTool
+from bokeh.layouts import column
+from bokeh.models import CDSView, ColumnDataSource, HoverTool, IndexFilter
 from bokeh.plotting import figure, output_file, save
 from fpdf import HTMLMixin
 
@@ -204,7 +205,12 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
         # create a new plot
         p = figure(plot_height=700, plot_width=1000, tools=tools, x_axis_label='Days', x_minor_ticks=len(days),
                    y_axis_label='Temperature ({0}C)'.format(degree), x_axis_type="datetime", toolbar_location="right",
-                   title="Reagent Carousel Temperature Readings")
+                   title="All Temperature Readings")
+        p_filtered = figure(plot_height=700, plot_width=1000, tools=tools, x_axis_label='Days',
+                                x_minor_ticks=len(days),
+                                y_axis_label='Temperature ({0}C)'.format(degree), x_axis_type="datetime",
+                                toolbar_location="right",
+                                title="Out of Limit Temperature Readings")
 
         from datetime import datetime
         daysF = None
@@ -225,7 +231,32 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
 
         # p.line(days, upper, legend="Upper Limit", line_width=3)
         # p.line(days, lower, legend="Lower Limit", line_width=3)
-        p.circle_x('Day', 'Temp', source=source, legend="Readings", line_width=3, hover_color="green")
+        filter_points =[]
+        for i, item in enumerate(temps):
+            if item < low[i] or item > high[i]:
+                filter_points.append(i)
+        view = CDSView(source=source, filters=[IndexFilter(filter_points)])
+        p_filtered.circle('Day', 'Temp', source=source, legend="Readings", line_width=3, hover_color="green", alpha=0.4,
+                   size=11, view=view)
+        # p.annulus(x=days, y=temps, color="#7FC97F",
+        #              inner_radius=0.2, outer_radius=0.5)
+
+        p_filtered.title.align = "center"
+        p_filtered.title.text_color = "navy"
+        p_filtered.title.text_font_size = "20px"
+        p_filtered.title.text_font_style = "bold"
+        p_filtered.xaxis[0].ticker.desired_num_ticks = len(days)
+        p_filtered.legend.visible = False
+        p_filtered.select_one(HoverTool).tooltips = [
+            ('Date', '@Day_str'),
+            ('Temp', '@Temp'),
+            ('High', '@High'),
+            ('Low', '@Low'),
+            ('Status', '@Status')
+            ]
+
+        p.circle('Day', 'Temp', source=source, legend="Readings", line_width=3, hover_color="green", alpha=0.4,
+                 size=11)
         # p.annulus(x=days, y=temps, color="#7FC97F",
         #              inner_radius=0.2, outer_radius=0.5)
 
@@ -242,7 +273,11 @@ class TempReaderApp(QMainWindow, Ui_MainWindow):
             ('Low', '@Low'),
             ('Status', '@Status')
             ]
-        save(p)
+
+        if filter_points:
+            save(column(p, p_filtered))
+        else:
+            save(column(p))
 
         try:
             shutil.copy2(os.path.join('temp_plot.html'), os.path.join("Plots" + os.sep + "plot.html"))
